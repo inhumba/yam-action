@@ -1,0 +1,20 @@
+name: Yam report
+description: ส่งรายงาน CVE และ dependency ของ repo ไปป้อมยาม (Yam) ทุกคำขอเซ็น HMAC
+author: inhumba
+inputs:
+  site-id:
+    description: site id ของแอปในป้อมยาม (repo variable YAM_SITE_ID)
+    required: true
+  secret:
+    description: secret ของ CI ที่ออกจากแท็บ CI ของป้อมยาม (repo secret YAM_SECRET)
+    required: true
+  portal:
+    description: ที่อยู่ agent ของป้อมยาม เช่น https://yam-agent.example.com
+    required: true
+  env-map:
+    description: branch → env เช่น "main=prod,develop=uat" ว่าง = default branch คือ prod (repo variable YAM_ENV_MAP)
+    required: false
+    default: ""
+runs:
+  using: node24
+  main: dist/index.cjs
