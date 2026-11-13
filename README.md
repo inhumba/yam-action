@@ -49,7 +49,10 @@ jobs:
           env-map: ${{ vars.YAM_ENV_MAP }}
 ```
 
+- `yam.yml` ต้องอยู่บน default branch ด้วย GitHub รัน schedule และแสดงปุ่ม Run workflow จากไฟล์บน default branch เท่านั้น
+- `YAM_ENV_MAP` ซ้ายเป็นชื่อ branch ขวาเป็น `prod` หรือ `uat` เช่น branch `production` กับ `uat` → `production=prod,uat=uat`
 - branch ที่ไม่อยู่ใน `YAM_ENV_MAP` (หรือไม่ใช่ default branch เมื่อไม่ตั้ง) จะไม่ส่งรายงานและไม่ล้ม
+- ต้องมี lockfile ใน repo (`pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, `composer.lock`) ถ้าไม่มี log จะเตือนว่าไม่ได้ตรวจ dependency
 - เจอช่องโหว่ไม่ทำให้ job ล้ม job ล้มเมื่อส่งรายงานไม่สำเร็จ ข้อความใน log บอกวิธีแก้
 - ผลสรุปอยู่ใน job summary
 

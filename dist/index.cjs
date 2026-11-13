@@ -7,6 +7,8 @@ var __export = (target, all) => {
 
 // src/main.ts
 var import_node_child_process2 = require("node:child_process");
+var import_node_fs4 = require("node:fs");
+var import_node_path4 = require("node:path");
 
 // ../../packages/protocol/src/signing.ts
 var REQUEST_PREFIX = "YAM-REQ-1";
@@ -20678,6 +20680,14 @@ async function postSigned(portal, path, siteId, key, payload, fetcher = (u, i) =
 // src/main.ts
 var TRIGGERS = ["push", "schedule", "workflow_dispatch"];
 var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function noLockfileMessage(cwd) {
+  const found = ["package.json", "composer.json"].filter((f) => (0, import_node_fs4.existsSync)((0, import_node_path4.join)(cwd, f)));
+  return [
+    "\u0E44\u0E21\u0E48\u0E40\u0E08\u0E2D lockfile (pnpm-lock.yaml, package-lock.json, yarn.lock, composer.lock) \u0E08\u0E36\u0E07\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E15\u0E23\u0E27\u0E08 dependency",
+    found.length ? `\u0E40\u0E08\u0E2D ${found.join(", ")} \u0E41\u0E15\u0E48\u0E44\u0E21\u0E48\u0E21\u0E35 lockfile \u0E04\u0E39\u0E48\u0E01\u0E31\u0E19 (\u0E21\u0E31\u0E01\u0E42\u0E14\u0E19 .gitignore)` : "",
+    "\u0E43\u0E2B\u0E49 commit lockfile \u0E40\u0E02\u0E49\u0E32 repo \u0E41\u0E25\u0E49\u0E27\u0E23\u0E31\u0E19\u0E43\u0E2B\u0E21\u0E48"
+  ].filter(Boolean).join(" \xB7 ");
+}
 async function run(d) {
   const { env } = d;
   const secret = input2(env, "secret");
@@ -20697,6 +20707,8 @@ async function run(d) {
   const commit = d.commit ?? gitCommit(d.cwd) ?? env.GITHUB_SHA ?? "";
   const built = await buildPayloads(parsed, d.cwd, ciEnv2, { repo: run2.repo, branch, commit, runId: run2.runId, runUrl: run2.runUrl, trigger: run2.event }, d.nowS ?? Math.floor(Date.now() / 1e3));
   for (const w of built.warnings) logWarning(w);
+  const noLockfile = parsed.manifests.length === 0;
+  if (noLockfile) logWarning(noLockfileMessage(d.cwd));
   const key = secretKey(secret);
   const r = await postSigned(portal, "/agent/v1/ci/report", siteId, key, built.report, d.fetcher);
   let dependenciesSent = false;
@@ -20709,8 +20721,9 @@ async function run(d) {
   writeSummary(
     env,
     [
-      `### Yam: \u0E2A\u0E48\u0E07\u0E23\u0E32\u0E22\u0E07\u0E32\u0E19 ${ciEnv2.toUpperCase()} \u0E41\u0E25\u0E49\u0E27`,
+      `### Yam: \u0E2A\u0E48\u0E07\u0E23\u0E32\u0E22\u0E07\u0E32\u0E19 ${ciEnv2.toUpperCase()} \u0E41\u0E25\u0E49\u0E27${noLockfile ? " \u0E41\u0E15\u0E48\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E15\u0E23\u0E27\u0E08 dependency" : ""}`,
       "",
+      ...noLockfile ? [`> ${noLockfileMessage(d.cwd)}`, ""] : [],
       `| critical | high | medium | low | \u0E44\u0E21\u0E48\u0E23\u0E30\u0E1A\u0E38 | package |`,
       `| --- | --- | --- | --- | --- | --- |`,
       `| ${count("critical")} | ${count("high")} | ${count("medium")} | ${count("low")} | ${count("unknown")} | ${built.dependencies.packages.length} |`,
@@ -20719,7 +20732,7 @@ async function run(d) {
     ].join("\n")
   );
   console.log(`Yam: \u0E2A\u0E48\u0E07\u0E23\u0E32\u0E22\u0E07\u0E32\u0E19 ${ciEnv2} \u0E41\u0E25\u0E49\u0E27 \u0E0A\u0E48\u0E2D\u0E07\u0E42\u0E2B\u0E27\u0E48 ${built.report.findings.length} \u0E23\u0E32\u0E22\u0E01\u0E32\u0E23 package ${built.dependencies.packages.length} \u0E15\u0E31\u0E27`);
-  return { sent: true, findings: built.report.findings.length, dependenciesSent };
+  return { sent: true, findings: built.report.findings.length, dependenciesSent, noLockfile };
 }
 function skip(env, reason) {
   console.log(`Yam: ${reason}`);
