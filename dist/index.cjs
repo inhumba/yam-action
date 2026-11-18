@@ -19874,7 +19874,12 @@ var hostCapabilities = external_exports.object({
   disallow_file_edit: external_exports.boolean(),
   automatic_updater_disabled: external_exports.boolean(),
   wp_content_writable: external_exports.boolean(),
-  mu_plugins_writable: external_exports.boolean()
+  mu_plugins_writable: external_exports.boolean(),
+  /**
+   * loopback ล่าสุดตอนแอดมินเปิด wp-admin (D32) null = ยังไม่เคยตรวจ · ใช้แสดงผลบนป้อมยามเท่านั้น
+   * งานอัปเดตตรวจ loopback เองใน process ที่รันงาน เพราะผลของ web กับ CLI ต่างกัน (D90)
+   */
+  loopback: external_exports.boolean().nullable().optional()
 });
 var requires = {
   requires_php: version2.nullable(),
@@ -19941,8 +19946,15 @@ var cronStatus = external_exports.object({
 var backupInterval = external_exports.enum(["hourly", "daily", "weekly", "monthly", "other"]);
 var backupDestination = external_exports.object({
   id: external_exports.string().regex(/^[a-z0-9_]{1,32}$/),
-  /** `ai1wmke_<id>_timestamp` */
+  /** ค่าที่ใหม่กว่าระหว่าง `ai1wmke_<id>_timestamp` กับ log ของเมนู Schedules (D51) ใช้แสดงและเตือน backup เก่า */
   last_backup_at: unixS.nullable(),
+  /**
+   * `ai1wmke_<id>_timestamp` ดิบ เขียนเฉพาะเมื่ออัปโหลดครบ (D31, ยืนยันกับ Schedules ใน 2.2)
+   * ใช้เป็นเงื่อนไขก่อนอัปเดต core (D82) · เฟส 2 ปลั๊กอินรุ่นก่อนไม่ส่ง = ถือว่าไม่รู้
+   */
+  timestamp_at: unixS.nullable().optional(),
+  /** `ai1wmke_<id>_incremental` เปิดอยู่ · incremental ไม่นับเป็น backup ก่อน core จนกว่าทดสอบ restore ผ่าน (D63, D82) */
+  incremental: external_exports.boolean().optional(),
   /** จาก cron `ai1wmke_<id>_<interval>_export` */
   schedules: external_exports.array(external_exports.object({ interval: backupInterval, next_at: unixS.nullable() })).max(10)
 });
@@ -19982,13 +19994,23 @@ var policyStatus = external_exports.object({
   actual: external_exports.record(external_exports.string().max(64), external_exports.unknown()),
   drift: external_exports.array(external_exports.object({ key: external_exports.string().max(64), expected: external_exports.unknown(), actual: external_exports.unknown() })).max(100)
 });
+var agentJobsStatus = external_exports.object({
+  /** เวลาที่ runner ทำงานล่าสุด (รับงานหรือไม่ก็ตาม) */
+  last_run_at: unixS.nullable(),
+  /** สถานะของงานล่าสุดที่รายงาน เช่น succeeded, rolled_back */
+  last_status: external_exports.string().max(32).nullable(),
+  /** เหตุที่รอบล่าสุดไม่ได้รับงาน เช่น "AI1WM กำลัง backup (export) อยู่" null = รับงานได้ปกติ */
+  waiting_reason: external_exports.string().max(300).nullable()
+});
 var status = external_exports.object({
   disk_free_bytes: external_exports.number().min(0).nullable(),
   cron: cronStatus,
   backup: backupStatus,
   ssl: sslStatus.nullable(),
   site_health: siteHealthStatus.nullable(),
-  policy: policyStatus.nullable()
+  policy: policyStatus.nullable(),
+  /** Yam Agent 0.2.1 ขึ้นไป (D98) */
+  jobs: agentJobsStatus.optional()
 });
 
 // ../../packages/protocol/src/schemas/heartbeat.ts
@@ -20050,6 +20072,7 @@ var jobSpec = external_exports.discriminatedUnion("ability", [
   }),
   external_exports.object({
     ability: external_exports.literal("yam/update-core"),
+    /** require_backup_within_s = 0 คือแอดมินยืนยันข้ามเงื่อนไข backup (D82) · เฉพาะเริ่มทันที (D83) */
     params: external_exports.object({ to_version: version2, require_backup_within_s: external_exports.int().min(0) })
   }),
   external_exports.object({
@@ -20080,7 +20103,8 @@ var jobStep = external_exports.object({
 var jobsReportRequest = external_exports.object({
   schema,
   job_id: uuid3,
-  status: external_exports.enum(["running", "succeeded", "failed", "rolled_back"]),
+  /** skipped = ไม่ได้แตะไฟล์ เช่นรุ่นที่มีตอนรันไม่ตรง to_version หรือไม่มี package (D81) เหตุผลอยู่ใน steps */
+  status: external_exports.enum(["running", "succeeded", "failed", "rolled_back", "skipped"]),
   steps: external_exports.array(jobStep).max(200),
   versions_before: external_exports.record(external_exports.string().max(300), version2),
   versions_after: external_exports.record(external_exports.string().max(300), version2),
@@ -20118,12 +20142,15 @@ var pluginLatestResponse = external_exports.object({
     version: version2,
     requires_php: version2,
     requires_wp: version2.nullable(),
+    /** `<ที่อยู่ agent>/agent/v1/plugin/zip?version=<รุ่น>` ต้องเรียกแบบเซ็น */
     url: httpUrl2,
     sha256: sha256HexString,
     signature: base64url3,
     released_at: unixS
   }).nullable()
 });
+var pluginZipQuery = external_exports.object({ version: external_exports.string().regex(/^\d+\.\d+\.\d+$/) });
+var MAX_PLUGIN_ZIP_BYTES = 2 * 1024 * 1024;
 
 // ../../packages/protocol/src/schemas/tickets.ts
 var ticketCreateRequest = external_exports.object({
@@ -20424,6 +20451,19 @@ var REFETCH_MS = 24 * 36e5;
 var HOUR = 36e5;
 var DAY = 24 * HOUR;
 var BKK_OFFSET = 7 * HOUR;
+var BACKUP_FIRST_GRACE_MS = 6 * HOUR;
+var CRON_OVERDUE_ALERT_MS = 2 * HOUR;
+var CRON_OVERDUE_GAP_MS = 2 * HOUR;
+var CRON_OVERDUE_FRESH_MS = 90 * 6e4;
+
+// ../../packages/core/src/jobs.ts
+var MIN = 6e4;
+var HOUR2 = 60 * MIN;
+var MAX_SILENCE_MS = 3 * HOUR2;
+var ICT_OFFSET = 7 * HOUR2;
+var QUEUE_TTL_MS = 24 * HOUR2;
+var RUNNING_TTL_MS = 20 * MIN;
+var CORE_BACKUP_MAX_AGE_S = 24 * 60 * 60;
 
 // ../../packages/core/src/index.ts
 var HOUR_MS = 60 * 60 * 1e3;
@@ -20535,12 +20575,27 @@ function directNames(root, manifest) {
   return out;
 }
 var clean = (v) => v.trim().replace(/^v(?=\d)/, "").slice(0, 64);
+function dockerNode(text) {
+  let found = null;
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\s*FROM\s+(?:--\S+\s+)*(?:docker\.io\/)?(?:library\/)?node:(\S+)/i.exec(line);
+    if (!m?.[1]) continue;
+    const v = /^v?(\d+(?:\.\d+){0,2})(?=$|[-@])/.exec(m[1]);
+    if (v?.[1]) found = v[1];
+  }
+  return found;
+}
 function runtimes(root, manifests) {
   const out = [];
   const dirs = [.../* @__PURE__ */ new Set(["", ...manifests.map((m) => (0, import_node_path3.dirname)(m)).filter((d) => d !== ".")])];
   const rel = (p) => (0, import_node_path3.relative)(root, p);
   for (const d of dirs) {
     const base = (0, import_node_path3.join)(root, d);
+    if (!out.some((c) => c.name === "node")) {
+      const p = (0, import_node_path3.join)(base, "Dockerfile");
+      const v = (0, import_node_fs3.existsSync)(p) ? dockerNode((0, import_node_fs3.readFileSync)(p, "utf8")) : null;
+      if (v) out.push({ name: "node", version: v, from: rel(p) });
+    }
     if (!out.some((c) => c.name === "node")) {
       for (const f of [".nvmrc", ".node-version"]) {
         const p = (0, import_node_path3.join)(base, f);
